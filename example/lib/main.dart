@@ -36,6 +36,7 @@ class _BooksAppState extends State<BooksApp> {
         switch (settings.name) {
           case '/':
             return CupertinoModalSheetRoute(
+              fullPage: true,
               settings: settings,
               builder: (BuildContext context) {
                 return BooksListScreen(

@@ -10,10 +10,12 @@ Future<T?> showCupertinoModalSheet<T>(
     RouteSettings? routeSettings,
     bool fullscreenDialog = true,
     bool barrierDismissible = true,
+    bool fullPage = false,
     CupertinoModalSheetRouteTransition firstTransition = CupertinoModalSheetRouteTransition.none}) {
   return Navigator.of(context, rootNavigator: useRootNavigator).push(
     CupertinoModalSheetRoute<T>(
       builder: builder,
+      fullPage: fullPage,
       settings: routeSettings,
       fullscreenDialog: fullscreenDialog,
       barrierDismissible: barrierDismissible,
@@ -26,10 +28,12 @@ Future<T?> showCupertinoModalSheet<T>(
 class CupertinoModalSheetPage<T> extends Page<T> {
   final Widget child;
   final CupertinoModalSheetRouteTransition firstTransition;
+  final bool fullPage;
 
   const CupertinoModalSheetPage({
     super.key,
     required this.child,
+    required this.fullPage,
     super.name,
     super.arguments,
     super.restorationId,
@@ -40,6 +44,7 @@ class CupertinoModalSheetPage<T> extends Page<T> {
   Route<T> createRoute(BuildContext context) {
     return _PagedCupertinoModalSheetRoute<T>(
       this,
+      fullPage: fullPage,
       firstTransition: firstTransition,
     );
   }
@@ -48,8 +53,12 @@ class CupertinoModalSheetPage<T> extends Page<T> {
 class _PagedCupertinoModalSheetRoute<T> extends CupertinoModalSheetRoute<T> {
   _PagedCupertinoModalSheetRoute(
     CupertinoModalSheetPage<T> page, {
+    required super.fullPage,
     super.firstTransition = CupertinoModalSheetRouteTransition.none,
-  }) : super(settings: page, builder: (_) => const SizedBox());
+  }) : super(
+          settings: page,
+          builder: (_) => const SizedBox(),
+        );
 
   @override
   WidgetBuilder get builder => (context) => (settings as CupertinoModalSheetPage<T>).child;

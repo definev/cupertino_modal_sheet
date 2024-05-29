@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:cupertino_modal_sheet/cupertino_modal_sheet.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 
@@ -16,6 +17,60 @@ enum CupertinoModalSheetRouteTransition {
   fade,
 }
 
+class CupertinoSheetRouteData {
+  const CupertinoSheetRouteData({
+    required this.depth,
+    required this.fullPage,
+  });
+
+  static const CupertinoSheetRouteData firstPage = CupertinoSheetRouteData(depth: 0, fullPage: true);
+
+  final int depth;
+  final bool fullPage;
+
+  bool get skipStackTransition => depth <= 2 && fullPage == false;
+
+  @override
+  String toString() => 'depth: $depth, fullPage: $fullPage';
+}
+
+class TracableCupertinoSheetRouteData {
+  TracableCupertinoSheetRouteData({
+    required this.prev,
+    required this.curr,
+  });
+
+  final CupertinoSheetRouteData? prev;
+  final CupertinoSheetRouteData curr;
+
+  @override
+  String toString() {
+    return 'prev: $prev, curr: $curr';
+  }
+}
+
+class CupertinoSheetRoute extends InheritedWidget {
+  const CupertinoSheetRoute({
+    Key? key,
+    required this.data,
+    required Widget child,
+  }) : super(key: key, child: child);
+
+  final ValueNotifier<TracableCupertinoSheetRouteData> data;
+
+  static ValueNotifier<TracableCupertinoSheetRouteData>? maybeOf(BuildContext context) {
+    final CupertinoSheetRoute? result = context.dependOnInheritedWidgetOfExactType<CupertinoSheetRoute>();
+    return result?.data;
+  }
+
+  static ValueNotifier<TracableCupertinoSheetRouteData> of(BuildContext context) {
+    return maybeOf(context)!;
+  }
+
+  @override
+  bool updateShouldNotify(CupertinoSheetRoute oldWidget) => data != oldWidget.data;
+}
+
 /// A route that shows a iOS-style modal sheet that slides up from the
 /// bottom of the screen.
 ///
@@ -28,6 +83,7 @@ class CupertinoModalSheetRoute<T> extends PageRouteBuilder<T> {
   /// The values of [builder] must not be null.
   CupertinoModalSheetRoute({
     required this.builder,
+    required this.fullPage,
     super.barrierDismissible = true,
     super.settings,
     super.transitionDuration,
@@ -48,22 +104,50 @@ class CupertinoModalSheetRoute<T> extends PageRouteBuilder<T> {
   /// A transition for initial page push animation.
   final CupertinoModalSheetRouteTransition firstTransition;
 
+  final bool fullPage;
+
   Curve _curve = Curves.easeInOut;
+  ValueNotifier<TracableCupertinoSheetRouteData>? _routeDataNotifier;
+  bool _completed = false;
 
   @override
-  Widget buildPage(BuildContext context, Animation<double> animation,
-      Animation<double> secondaryAnimation) {
+  void didComplete(T? result) {
+    _completed = true;
+    final currentData = _routeDataNotifier!.value;
+    _routeDataNotifier!.value = TracableCupertinoSheetRouteData(
+      prev: currentData.curr,
+      curr: CupertinoSheetRouteData(
+        depth: currentData.curr.depth - 1,
+        fullPage: fullPage,
+      ),
+    );
+    super.didComplete(result);
+  }
+
+  @override
+  Widget buildPage(BuildContext context, Animation<double> animation, Animation<double> secondaryAnimation) {
+    _routeDataNotifier ??= () {
+      final notifier = CupertinoSheetRoute.of(context);
+      Future.microtask(() {
+        notifier.value = TracableCupertinoSheetRouteData(
+          prev: notifier.value.prev ?? CupertinoSheetRouteData.firstPage,
+          curr: CupertinoSheetRouteData(
+            depth: notifier.value.curr.depth + 1,
+            fullPage: fullPage,
+          ),
+        );
+      });
+      return notifier;
+    }();
+
     final size = MediaQuery.of(context).size;
     final BoxConstraints constrainsts;
-    var borderRadius =
-        const BorderRadius.vertical(top: Radius.circular(sheetCornerRadius));
+    var borderRadius = const BorderRadius.vertical(top: Radius.circular(sheetCornerRadius));
     if (size.width > breakpointWidth) {
       if (isFirst) {
         return builder(context);
       }
-      constrainsts = BoxConstraints(
-          maxWidth: maxSize.width,
-          maxHeight: min(size.height * 0.9, maxSize.height));
+      constrainsts = BoxConstraints(maxWidth: maxSize.width, maxHeight: min(size.height * 0.9, maxSize.height));
       borderRadius = const BorderRadius.all(Radius.circular(sheetCornerRadius));
     } else {
       constrainsts = BoxConstraints(
@@ -80,10 +164,20 @@ class CupertinoModalSheetRoute<T> extends PageRouteBuilder<T> {
           child: CupertinoUserInterfaceLevel(
             data: CupertinoUserInterfaceLevelData.elevated,
             child: ConstrainedBox(
-                constraints: constrainsts,
-                child: Visibility(
-                  visible: barrierDismissible,
-                  replacement: ClipRRect(
+              constraints: constrainsts,
+              child: Visibility(
+                visible: barrierDismissible,
+                replacement: ClipRRect(
+                  borderRadius: borderRadius,
+                  child: MediaQuery.removePadding(
+                    context: context,
+                    removeTop: true,
+                    child: builder(context),
+                  ),
+                ),
+                child: _gestureDetector(
+                  size: size,
+                  child: ClipRRect(
                     borderRadius: borderRadius,
                     child: MediaQuery.removePadding(
                       context: context,
@@ -91,18 +185,9 @@ class CupertinoModalSheetRoute<T> extends PageRouteBuilder<T> {
                       child: builder(context),
                     ),
                   ),
-                  child: _gestureDetector(
-                    size: size,
-                    child: ClipRRect(
-                      borderRadius: borderRadius,
-                      child: MediaQuery.removePadding(
-                        context: context,
-                        removeTop: true,
-                        child: builder(context),
-                      ),
-                    ),
-                  ),
-                )),
+                ),
+              ),
+            ),
           ),
         ),
       );
@@ -121,49 +206,28 @@ class CupertinoModalSheetRoute<T> extends PageRouteBuilder<T> {
         return child;
       }
     }
-    final secValue = secondaryAnimation.value;
-    final paddingTop = _paddingTop(context);
-    if (isFirst) {
-      final offset = secValue * paddingTop;
-      final scale = 1 - secValue * scaleFactor;
-      final r = paddingTop > 30 ? displayCornerRadius : 0.0;
-      final radius = r - secValue * (r - sheetCornerRadius);
-      final clipChild = ClipRRect(
-        borderRadius: BorderRadius.circular(radius),
+
+    final routeDataNotifier = _routeDataNotifier ?? CupertinoSheetRoute.of(context);
+
+    return ListenableBuilder(
+      listenable: routeDataNotifier,
+      builder: (context, _) => _ListenableCupertinoSheetRoute(
+        routeData: _completed
+            ? routeDataNotifier.value.prev ??
+                CupertinoSheetRouteData(
+                  depth: 2,
+                  fullPage: fullPage,
+                )
+            : routeDataNotifier.value.curr,
+        curve: _curve,
+        animation: animation,
+        secondaryAnimation: secondaryAnimation,
+        isFirst: isFirst,
+        fullPage: fullPage,
+        firstTransition: firstTransition,
         child: child,
-      );
-      var transitionChild =
-          _stackTransition(offset, scale, secondaryAnimation, clipChild);
-      if (firstTransition == CupertinoModalSheetRouteTransition.fade) {
-        transitionChild = FadeTransition(
-          opacity: animation,
-          child: transitionChild,
-        );
-      }
-      if (firstTransition == CupertinoModalSheetRouteTransition.scale) {
-        transitionChild = ScaleTransition(
-          scale: animation,
-          child: transitionChild,
-        );
-      }
-      return AnnotatedRegion<SystemUiOverlayStyle>(
-        value: SystemUiOverlayStyle.light,
-        child: transitionChild,
-      );
-    }
-    if (secondaryAnimation.isDismissed) {
-      final tween = Tween(begin: const Offset(0.0, 1.0), end: Offset.zero);
-      final curveTween = CurveTween(curve: _curve);
-      return SlideTransition(
-        position: animation.drive(curveTween).drive(tween),
-        child: child,
-      );
-    } else {
-      final dist = (paddingTop + sheetOffset) * (1 - scaleFactor);
-      final double offset = secValue * (paddingTop - dist);
-      final scale = 1 - secValue * scaleFactor;
-      return _stackTransition(offset, scale, secondaryAnimation, child);
-    }
+      ),
+    );
   }
 
   Widget _gestureDetector({required Widget child, required Size size}) {
@@ -176,8 +240,7 @@ class CupertinoModalSheetRoute<T> extends PageRouteBuilder<T> {
         animateForward = (controller?.value ?? 0) > 0.5;
       }
       if (animateForward) {
-        controller?.animateTo(1.0,
-            duration: transitionDuration, curve: Curves.easeInOut);
+        controller?.animateTo(1.0, duration: transitionDuration, curve: Curves.easeInOut);
       } else {
         navigator?.pop();
       }
@@ -219,9 +282,49 @@ class CupertinoModalSheetRoute<T> extends PageRouteBuilder<T> {
     }
     return paddingTop;
   }
+}
 
-  Widget _stackTransition(
-      double offset, double scale, Animation<double> animation, Widget child) {
+class _ListenableCupertinoSheetRoute extends StatefulWidget {
+  const _ListenableCupertinoSheetRoute({
+    required this.routeData,
+    required this.curve,
+    required this.animation,
+    required this.secondaryAnimation,
+    required this.isFirst,
+    required this.fullPage,
+    required this.firstTransition,
+    required this.child,
+  });
+
+  final CupertinoSheetRouteData routeData;
+
+  final Animation<double> animation;
+  final Animation<double> secondaryAnimation;
+
+  final bool isFirst;
+  final bool fullPage;
+  final CupertinoModalSheetRouteTransition firstTransition;
+  final Curve curve;
+
+  final Widget child;
+
+  @override
+  State<_ListenableCupertinoSheetRoute> createState() => _ListenableCupertinoSheetRouteState();
+}
+
+class _ListenableCupertinoSheetRouteState extends State<_ListenableCupertinoSheetRoute> {
+  CupertinoSheetRouteData? prevRouteData;
+  ValueNotifier<CupertinoSheetRouteData>? routeDataNotifier;
+
+  double _paddingTop(BuildContext context) {
+    var paddingTop = MediaQuery.of(context).padding.top;
+    if (paddingTop <= 20) {
+      paddingTop += 10;
+    }
+    return paddingTop;
+  }
+
+  Widget _stackTransition(double offset, double scale, Animation<double> animation, Widget child) {
     return AnimatedBuilder(
       builder: (context, child) => Transform(
         transform: Matrix4.translationValues(0, offset, 0)..scale(scale),
@@ -231,5 +334,47 @@ class CupertinoModalSheetRoute<T> extends PageRouteBuilder<T> {
       animation: animation,
       child: child,
     );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final secValue = widget.secondaryAnimation.value;
+    final paddingTop = _paddingTop(context);
+    if (widget.isFirst) {
+      var offset = secValue * paddingTop;
+      var scale = 1 - secValue * scaleFactor;
+      final r = paddingTop > 30 ? displayCornerRadius : 0.0;
+      final radius = r - secValue * (r - sheetCornerRadius);
+      final clipChild = ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: widget.child,
+      );
+
+      if (widget.routeData.skipStackTransition) {
+        offset = 0;
+        scale = 1;
+      }
+
+      Widget transitionChild = _stackTransition(offset, scale, widget.secondaryAnimation, clipChild);
+
+      return AnnotatedRegion<SystemUiOverlayStyle>(
+        value: SystemUiOverlayStyle.light,
+        child: transitionChild,
+      );
+    }
+    if (widget.secondaryAnimation.isDismissed) {
+      final tween = Tween(begin: const Offset(0.0, 1.0), end: Offset.zero);
+      final curveTween = CurveTween(curve: widget.curve);
+      return SlideTransition(
+        position: widget.animation.drive(curveTween).drive(tween),
+        child: widget.child,
+      );
+    } else {
+      final dist = (paddingTop + sheetOffset) * (1 - scaleFactor);
+      final double offset = secValue * (paddingTop - dist);
+      var scale = 1 - secValue * scaleFactor;
+
+      return _stackTransition(offset, scale, widget.secondaryAnimation, widget.child);
+    }
   }
 }
